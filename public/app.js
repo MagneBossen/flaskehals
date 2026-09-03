@@ -778,9 +778,11 @@ function screenResult() {
     punishNode,
     r.skipped
       ? (skippedDare ? null : el('div', { class: 'count-line' }, t('skipAdvancing')))
-      : (room.forceContinue && !iAmPicked
-          ? el('div', { class: 'count-line' }, t('theyDropped'))
-          : (!iAmPicked && el('div', { class: 'count-line' }, [t('waitingForPre') + ' ', raw(picked.name || ''), '…']))),
+      : (!iAmPicked && (picked.connected === false
+          ? el('div', { class: 'count-line' }, t('pickedGone'))
+          : (room.forceContinue
+              ? el('div', { class: 'count-line' }, t('theyDropped'))
+              : el('div', { class: 'count-line' }, [t('waitingForPre') + ' ', raw(picked.name || ''), '…'])))),
     el('div', { class: 'spacer' }),
     // Buttons stay while choosing; after a skip they stay only for a dare (a
     // drink auto-advances). A dare needs an explicit "done" tap.
