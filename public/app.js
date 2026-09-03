@@ -485,6 +485,9 @@ function leaveRoom() {
   me = null; room = null; leaveArmed = 0;
   countdownEndsAt = 0; sheetOpen = false; qrShown = false; avatarOpen = false;
   spinOrder = null; spinResumeKey = null;
+  // Drop the /join/<code> path so a reload doesn't silently auto-join us back in.
+  autoJoined = true;
+  if (location.pathname !== '/') history.replaceState(null, '', '/');
   view = 'landing';
   render();
 }

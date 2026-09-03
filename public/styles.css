@@ -37,6 +37,10 @@ body {
   font-size: 16px;
   line-height: 1.45;
   -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  /* iOS: kill the double-tap-to-zoom (and its 300ms click delay); pinch-zoom
+     and scrolling still work. */
+  touch-action: manipulation;
   overflow-x: hidden;
   /* faint printed-grid texture, brutalist */
   background-image:
@@ -161,8 +165,10 @@ button, .btn {
   color: var(--ink);
   box-shadow: var(--shadow-sm);
   cursor: pointer;
+  touch-action: manipulation;
   transition: transform .1s ease, box-shadow .1s ease, background .12s ease;
 }
+button, input, textarea, select, .player-card, .chip, .code-box { touch-action: manipulation; }
 /* the classic neo-brutalist push: element slides into its own shadow */
 button:active:not(:disabled), .btn:active:not(:disabled) {
   transform: translate(3px, 3px);
