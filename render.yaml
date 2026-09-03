@@ -1,0 +1,13 @@
+# Render Blueprint. Create a new web service in the same Render account that
+# hosts Vinylle — one account can run many separate free services.
+services:
+  - type: web
+    name: flaskehals
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

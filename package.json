@@ -1,0 +1,23 @@
+{
+  "name": "flaskehals",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Flaskehals — spin the bottle party game with live-synced lobbies",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "test": "FH_FAST=20 node test/flow.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.3"
+  }
+}
