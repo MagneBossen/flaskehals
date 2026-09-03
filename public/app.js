@@ -36,6 +36,10 @@ let spinResumeKey = null;      // startAt of the spin we've already started anim
 
 const prefill = location.pathname.match(/^\/join\/([A-Za-z0-9]+)/);
 let joinCode = prefill ? prefill[1].toUpperCase() : '';
+// Arrived on a /join/<code> link (usually a QR scan): skip the landing screen,
+// and if this phone already has a name saved, drop straight into the lobby.
+if (prefill && !(me && me.token)) view = 'join';
+let autoJoined = false;
 
 // --- language ----------------------------------------------------------
 // Purely a per-device choice: stored in localStorage, never sent to the server,
@@ -81,6 +85,10 @@ socket.on('connect', () => {
       if (res && res.ok) { me = res; LS.creds = res; }
       else { me = null; LS.creds = null; render(); }
     });
+  } else if (prefill && !autoJoined && LS.name.trim()) {
+    // QR scan + a remembered name → join without a single tap.
+    autoJoined = true;
+    doJoin();
   }
 });
 
@@ -425,6 +433,7 @@ function screenJoin() {
       el('div', {},
         el('label', {}, t('roomCode')),
         el('input', { type: 'text', maxlength: 6, value: joinCode, placeholder: 'ABCDEF',
+          readonly: !!prefill,
           style: 'text-transform:uppercase;letter-spacing:6px;font-family:"IBM Plex Mono",monospace',
           oninput: (e) => { joinCode = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); e.target.value = joinCode; } }),
       ),
