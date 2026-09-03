@@ -747,6 +747,8 @@ function screenResult() {
   const picked = room.players.find((p) => p.id === r.selectedPlayerId) || {};
   const iAmPicked = r.isMe;
   const canContinue = iAmPicked || room.forceContinue;
+  const wantsDare = ['dare', 'both'].includes(room.settings.punishment);
+  const skippedDare = r.skipped && r.punishmentShown && r.punishmentShown.type === 'dare';
 
   let punishNode = null;
   if (r.skipped) {
@@ -769,22 +771,27 @@ function screenResult() {
         ? el('div', { class: 'q-author' }, t('fromPre') + ' ', raw(r.authorName))
         : (room.settings.showAuthors ? null : el('div', { class: 'q-author' }, t('anonQuestion'))),
     ),
+    // In dare mode the dare is the alternative to answering — show it up front so
+    // it's a real either/or, not a surprise after skipping.
+    !r.skipped && wantsDare && r.dare && el('div', { class: 'dare-or' },
+      el('span', { class: 'lbl' }, t('orDare')), ' ', r.dare),
     punishNode,
-    // Once skipped, the server rolls straight on after a short beat — nobody
-    // taps again.
     r.skipped
-      ? el('div', { class: 'count-line' }, t('skipAdvancing'))
+      ? (skippedDare ? null : el('div', { class: 'count-line' }, t('skipAdvancing')))
       : (room.forceContinue && !iAmPicked
           ? el('div', { class: 'count-line' }, t('theyDropped'))
           : (!iAmPicked && el('div', { class: 'count-line' }, [t('waitingForPre') + ' ', raw(picked.name || ''), '…']))),
     el('div', { class: 'spacer' }),
-    !r.skipped && (iAmPicked || room.forceContinue)
+    // Buttons stay while choosing; after a skip they stay only for a dare (a
+    // drink auto-advances). A dare needs an explicit "done" tap.
+    (!r.skipped || skippedDare) && (iAmPicked || room.forceContinue)
       ? el('div', { class: 'btn-row' },
-          el('button', { class: 'btn-danger', disabled: !iAmPicked,
+          !r.skipped && el('button', { class: 'btn-danger', disabled: !iAmPicked,
             onclick: () => socket.emit('round:skip') }, t('skip')),
           el('button', { class: 'btn-primary', disabled: !canContinue,
             onclick: () => socket.emit('round:continue') },
-            room.forceContinue && !iAmPicked ? t('forceContinue') : t('continue')),
+            skippedDare ? t('dareDone')
+              : (room.forceContinue && !iAmPicked ? t('forceContinue') : t('continue'))),
         )
       : null,
   );
