@@ -136,10 +136,15 @@ io.on('connection', (socket) => {
     if (!room) return done({ error: 'no-room' });
     const player = R.playerByToken(room, payload && payload.token);
     if (!player) return done({ error: 'no-seat' });
-    // Drop any stale socket still mapped to this player.
+    // Drop any stale socket still mapped to this player, so a delayed disconnect
+    // from it can't later knock this fresh session offline.
     if (player.socketId && player.socketId !== socket.id) {
       const stale = io.sockets.sockets.get(player.socketId);
-      if (stale) stale.leave('bottle:' + room.code);
+      if (stale) {
+        stale.data.code = null;
+        stale.data.playerId = null;
+        stale.leave('bottle:' + room.code);
+      }
     }
     attachSocket(room, player, socket);
     done({ ok: true, code: room.code, playerId: player.id, token: player.token });
@@ -218,8 +223,14 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     const { room, player } = myRoomAndPlayer();
     if (!room || !player) return;
+    // This socket may have already been superseded: the player reloaded / scanned
+    // the QR again and rejoined on a fresh socket while this one was still lingering
+    // (mobile Safari often never sends a clean disconnect). If so, a late disconnect
+    // here must NOT knock the live session offline.
+    if (player.socketId && player.socketId !== socket.id) return;
     player.connected = false;
     player.socketId = null;
+    if (player._dropTimer) clearTimeout(player._dropTimer);
     G.broadcast(io, room);
     // Hold the seat for the rejoin window, then drop them.
     player._dropTimer = setTimeout(() => {
