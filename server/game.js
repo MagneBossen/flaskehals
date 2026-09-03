@@ -200,14 +200,24 @@ function skip(io, room, playerId) {
   if (room.phase !== 'result' || !room.currentRound || room.currentRound.skipped) return;
   if (room.currentRound.selectedPlayerId !== playerId) return;
   const q = room.questions.find((x) => x.id === room.currentRound.questionId);
+  const p = baselinePunishment(room, q);
   room.currentRound.skipped = true;
-  room.currentRound.punishmentShown = baselinePunishment(room, q);
+  room.currentRound.punishmentShown = p;
   broadcast(io, room);
-  // Skip = "I drink, move on." Show the punishment for a beat, then roll
-  // straight on — never make anyone tap a second time.
   clearTimer(room, 'softlock');
   clearTimer(room, 'skip');
-  room._timers.skip = setTimeout(() => advanceFromResult(io, room), SKIP_HOLD_MS);
+  if (!p || p.type !== 'dare') {
+    // A drink is a quick sip — show it for a beat, then roll straight on.
+    room._timers.skip = setTimeout(() => advanceFromResult(io, room), SKIP_HOLD_MS);
+  } else {
+    // A dare takes real time to do — leave it on screen until the picked player
+    // taps "done". Keep the anti-softlock timer so a no-show can't stall the room.
+    room._timers.softlock = setTimeout(() => {
+      room.forceContinue = true;
+      emitAll(io, room, 'round:force-continue', {});
+      broadcast(io, room);
+    }, SOFTLOCK_MS);
+  }
 }
 
 function continueRound(io, room, playerId) {
