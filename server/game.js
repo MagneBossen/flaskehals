@@ -21,6 +21,7 @@ const SPIN_LEAD_MS = 150;                   // gap between broadcast and animati
 const COOLDOWN_MS = 3000 / F;
 const SOFTLOCK_MS = (45 * 1000) / F;
 const SKIP_HOLD_MS = 2800 / F;             // show the punishment, then roll on — no second tap
+const GONE_ADVANCE_MS = (15 * 1000) / F;   // on-the-spot player is gone → auto-continue, no button
 const MAX_QUESTIONS_PER_PLAYER = 5;
 
 // --- broadcast --------------------------------------------------------------
@@ -52,6 +53,64 @@ function clearAllTimers(room) {
   Object.keys(room._timers).forEach((k) => clearTimer(room, k));
 }
 
+// --- player removal -------------------------------------------------------
+// A live spin animates off the segment order sent at spin time, and a result
+// softlocks on the picked player's id — so the roster must not change while the
+// wheel is turning or a question is on screen. Leavers/timeouts during those
+// phases are marked and pruned at the next safe edge instead.
+
+function rosterFrozen(room) {
+  return room.phase === 'wheel' || room.phase === 'result';
+}
+
+// Splice a player out for good and take their un-asked questions with them, so a
+// stale pool count / undeletable orphan questions can't survive their exit.
+function dropPlayer(io, room, playerId) {
+  if (!R.playerById(room, playerId)) return;
+  room.questions = room.questions.filter((q) => q.used || q.authorId !== playerId);
+  R.removePlayer(room, playerId);
+  if (R.activePlayers(room).length === 0) { R.endRoom(room.code); return; }
+  room.players.forEach((p) => {
+    p.questionsWritten = room.questions.filter((q) => q.authorId === p.id && !q.used).length;
+  });
+  broadcast(io, room);
+}
+
+// Called at every safe phase edge: clear out everyone marked gone.
+function prunePlayers(io, room) {
+  room.players.filter((p) => p._gone).map((p) => p.id).forEach((id) => dropPlayer(io, room, id));
+}
+
+// A player is definitively gone — an explicit leave, or a disconnect whose
+// rejoin grace has run out.
+function playerGone(io, room, playerId) {
+  const p = R.playerById(room, playerId);
+  if (!p) return;
+  p.connected = false;
+  p.socketId = null;
+  p._gone = true;
+  if (p._dropTimer) { clearTimeout(p._dropTimer); p._dropTimer = null; }
+  if (rosterFrozen(room)) {
+    if (room.phase === 'result' && room.currentRound
+        && room.currentRound.selectedPlayerId === playerId) armGoneAdvance(io, room);
+    broadcast(io, room);
+  } else {
+    dropPlayer(io, room, playerId);
+  }
+}
+
+// The player on the spot vanished (left or dropped). Give them 15s to reappear,
+// then move the room on by itself — no "continue for the room" button.
+function armGoneAdvance(io, room) {
+  clearTimer(room, 'gone');
+  room._timers.gone = setTimeout(() => {
+    if (room.phase !== 'result' || !room.currentRound) return;
+    const sp = R.playerById(room, room.currentRound.selectedPlayerId);
+    if (sp && sp.connected) return; // came back — let them play it out
+    advanceFromResult(io, room);
+  }, GONE_ADVANCE_MS);
+}
+
 // --- lobby → writing -------------------------------------------------------
 
 function startCountdown(io, room) {
@@ -77,6 +136,8 @@ function beginWriting(io, room) {
   room.phase = 'writing';
   room.currentRound = null;
   room.forceContinue = false;
+  prunePlayers(io, room);
+  if (!room.players.length) return;
   room.players.forEach((p) => { p.questionsWritten = room.questions.filter((q) => q.authorId === p.id).length; });
   room.timer = { startAt: R.serverNow(), duration };
   clearTimer(room, 'phase');
@@ -100,13 +161,15 @@ function endWriting(io, room) {
 // --- wheel ----------------------------------------------------------------
 
 function beginWheel(io, room) {
+  clearAllTimers(room);
+  prunePlayers(io, room);
+  if (!room.players.length) return;
   room.phase = 'wheel';
   room.timer = null;
   room.spinLock = false;
   room.forceContinue = false;
   room.currentRound = null;
   room.activeSpin = null;
-  clearAllTimers(room);
   broadcast(io, room);
 }
 
@@ -176,13 +239,18 @@ function land(io, room, playerId, questionId) {
   room.activeSpin = null;
   room.forceContinue = false;
   emitAll(io, room, 'round:landed', { selectedPlayerId: playerId });
-  // Anti-softlock: if the picked player never taps, let anyone advance.
+  // Anti-softlock: if the picked player is present but never taps, let anyone
+  // advance for the room after a while.
   clearTimer(room, 'softlock');
   room._timers.softlock = setTimeout(() => {
     room.forceContinue = true;
     emitAll(io, room, 'round:force-continue', {});
     broadcast(io, room);
   }, SOFTLOCK_MS);
+  // If they already left / dropped while the wheel was turning, don't sit on it —
+  // 15s then auto-advance, no button.
+  const sp = R.playerById(room, playerId);
+  if (!sp || !sp.connected) armGoneAdvance(io, room);
   broadcast(io, room);
 }
 
@@ -240,11 +308,15 @@ function advanceFromResult(io, room) {
 
   clearTimer(room, 'softlock');
   clearTimer(room, 'skip');
+  clearTimer(room, 'gone');
   room.phase = 'wheel';
   room.spinLock = true; // stays locked through the cooldown
   room.currentRound = null;
   room.forceContinue = false;
   room.cooldownUntil = R.serverNow() + COOLDOWN_MS;
+  // The round is on the books now — safe to clear out anyone who left mid-spin.
+  prunePlayers(io, room);
+  if (!room.players.length) return;
 
   const remaining = room.questions.filter((x) => !x.used).length;
   broadcast(io, room);
@@ -257,23 +329,14 @@ function advanceFromResult(io, room) {
   }, COOLDOWN_MS);
 }
 
-// A player left or dropped. A disconnect is a guess and the softlock timer
-// covers it; an explicit leave is a fact — if they were the one on the spot in
-// a result, don't make the whole room wait out the 45s softlock.
-function onPlayerGone(io, room, playerId) {
-  if (room.phase !== 'result' || !room.currentRound) return;
-  if (room.currentRound.selectedPlayerId !== playerId || room.forceContinue) return;
-  clearTimer(room, 'softlock');
-  room.forceContinue = true;
-  emitAll(io, room, 'round:force-continue', {});
-}
-
 // --- refill / end -------------------------------------------------------
 
 function beginRefill(io, room) {
   room.phase = 'refill';
   room.spinLock = false;
   room.currentRound = null;
+  prunePlayers(io, room);
+  if (!room.players.length) return;
   room.players.forEach((p) => { p.questionsWritten = room.questions.filter((q) => q.authorId === p.id && !q.used).length; });
   room.timer = { startAt: R.serverNow(), duration: REFILL_WINDOW_MS };
   clearTimer(room, 'phase');
@@ -316,6 +379,8 @@ function endGame(io, room) {
 function restartGame(io, room) {
   if (room.phase !== 'over') return;
   clearAllTimers(room);
+  prunePlayers(io, room);
+  if (!room.players.length) return;
   room.phase = 'lobby';
   room.questions = [];
   room.history = [];
@@ -372,7 +437,8 @@ module.exports = {
   beginWriting,
   spin,
   skip,
-  onPlayerGone,
+  playerGone,
+  armGoneAdvance,
   continueRound,
   beginRefill,
   endGame,

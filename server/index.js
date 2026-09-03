@@ -84,6 +84,7 @@ function ack(cb) {
 function attachSocket(room, player, socket) {
   player.socketId = socket.id;
   player.connected = true;
+  player._gone = false; // back before the prune — un-mark them
   if (player._dropTimer) { clearTimeout(player._dropTimer); player._dropTimer = null; }
   socket.data.code = room.code;
   socket.data.playerId = player.id;
@@ -207,17 +208,15 @@ io.on('connection', (socket) => {
     if (room) G.restartGame(io, room);
   });
 
-  // Explicit leave — drop the seat straight away, no rejoin grace.
+  // Explicit leave — no rejoin grace. Mid-spin / mid-result the seat is kept
+  // until the round resolves (game.js prunes it then); otherwise it goes now.
   socket.on('room:leave', () => {
     const { room, player } = myRoomAndPlayer();
     if (!room || !player) return;
     socket.leave('bottle:' + room.code);
     socket.data.code = null;
     socket.data.playerId = null;
-    G.onPlayerGone(io, room, player.id);
-    R.removePlayer(room, player.id);
-    if (R.activePlayers(room).length === 0) R.endRoom(room.code);
-    else G.broadcast(io, room);
+    G.playerGone(io, room, player.id);
   });
 
   socket.on('disconnect', () => {
@@ -231,17 +230,14 @@ io.on('connection', (socket) => {
     player.connected = false;
     player.socketId = null;
     if (player._dropTimer) clearTimeout(player._dropTimer);
+    // If they were the one on the spot, start the 15s auto-advance now — a
+    // disconnect there stalls the whole room.
+    if (room.currentRound && room.currentRound.selectedPlayerId === player.id) {
+      G.armGoneAdvance(io, room);
+    }
     G.broadcast(io, room);
-    // Hold the seat for the rejoin window, then drop them.
-    player._dropTimer = setTimeout(() => {
-      G.onPlayerGone(io, room, player.id);
-      R.removePlayer(room, player.id);
-      if (R.activePlayers(room).length === 0) {
-        R.endRoom(room.code);
-        return;
-      }
-      G.broadcast(io, room);
-    }, R.REJOIN_WINDOW_MS);
+    // Hold the seat for the rejoin window, then let them go for good.
+    player._dropTimer = setTimeout(() => G.playerGone(io, room, player.id), R.REJOIN_WINDOW_MS);
   });
 });
 
